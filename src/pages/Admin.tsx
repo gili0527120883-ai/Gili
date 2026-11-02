@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
-import { CheckCircle2, RotateCcw, Loader2, Clock, XCircle } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { CheckCircle2, RotateCcw, Loader2, Clock, XCircle, LockKeyhole, LogOut } from 'lucide-react';
 import { supabase, type BorrowRequest, type Item } from '@/lib/supabase';
+import type { Session } from '@supabase/supabase-js';
 
 interface AdminProps {
   refreshKey?: number;
@@ -13,11 +14,56 @@ interface Row extends BorrowRequest {
 export default function Admin({ refreshKey = 0 }: AdminProps) {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [session, setSession] = useState<Session | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [updating, setUpdating] = useState<string | null>(null);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [signingIn, setSigningIn] = useState(false);
 
-  const load = async () => {
+  useEffect(() => {
+    let active = true;
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      setAuthLoading(false);
+    });
+
+    void supabase.auth.getSession().then(({ data, error }) => {
+      if (!active) return;
+      if (error) setError('שגיאה בבדיקת ההתחברות');
+      setSession(data.session);
+      setAuthLoading(false);
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  const load = useCallback(async () => {
+    if (!session) return;
     setLoading(true);
+    setError(null);
+    const { data: admin, error: authorizationError } = await supabase
+      .from('admin_users')
+      .select('user_id')
+      .eq('user_id', session.user.id)
+      .maybeSingle();
+    if (authorizationError || !admin) {
+      setRows([]);
+      setError(
+        authorizationError
+          ? 'שגיאה בבדיקת הרשאות מנהל'
+          : 'החשבון הזה אינו מורשה למסך הניהול'
+      );
+      setLoading(false);
+      return;
+    }
+
     const { data, error } = await supabase
       .from('requests')
       .select('*, items:items(name)')
@@ -25,12 +71,31 @@ export default function Admin({ refreshKey = 0 }: AdminProps) {
     if (error) setError('שגיאה בטעינת הבקשות');
     else setRows((data || []) as Row[]);
     setLoading(false);
-  };
+  }, [session]);
 
   useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshKey]);
+    if (session) {
+      void load();
+    } else {
+      setRows([]);
+      setLoading(false);
+    }
+  }, [load, refreshKey, session]);
+
+  const signIn = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setError(null);
+    setSigningIn(true);
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    setSigningIn(false);
+    if (error) setError('ההתחברות נכשלה. בדקי את כתובת האימייל והסיסמה.');
+  };
+
+  const signOut = async () => {
+    setError(null);
+    const { error } = await supabase.auth.signOut();
+    if (error) setError('שגיאה ביציאה מהחשבון');
+  };
 
   const updateRequest = async (id: string, status: 'approved' | 'returned', itemId: string) => {
     setUpdating(id);
@@ -66,22 +131,92 @@ export default function Admin({ refreshKey = 0 }: AdminProps) {
     );
   };
 
-  if (loading)
+  if (authLoading || (session && loading))
     return (
       <div className="max-w-5xl mx-auto px-4 sm:px-6 py-10 flex justify-center">
         <Loader2 className="w-6 h-6 text-emerald-600 animate-spin" />
       </div>
     );
 
+  if (!session)
+    return (
+      <div className="max-w-md mx-auto px-4 sm:px-6 py-10">
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8">
+          <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-700 grid place-items-center mb-5">
+            <LockKeyhole className="w-6 h-6" />
+          </div>
+          <h1 className="text-2xl font-extrabold text-slate-800">כניסה למסך הניהול</h1>
+          <p className="text-slate-500 mt-2 mb-6 text-sm">
+            יש להתחבר עם חשבון מנהל שהוגדר בפרויקט Supabase.
+          </p>
+
+          {error && (
+            <div className="mb-4 flex items-center gap-2 text-sm bg-rose-50 text-rose-700 border border-rose-200 rounded-lg px-3 py-2.5">
+              <XCircle className="w-4 h-4 shrink-0" />
+              {error}
+            </div>
+          )}
+
+          <form onSubmit={signIn} className="space-y-4">
+            <div>
+              <label htmlFor="admin-email" className="block text-sm font-medium text-slate-700 mb-1.5">
+                כתובת אימייל
+              </label>
+              <input
+                id="admin-email"
+                type="email"
+                autoComplete="username"
+                required
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                className="w-full h-11 px-3 rounded-xl border border-slate-200 bg-white text-slate-800 focus:outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+              />
+            </div>
+            <div>
+              <label htmlFor="admin-password" className="block text-sm font-medium text-slate-700 mb-1.5">
+                סיסמה
+              </label>
+              <input
+                id="admin-password"
+                type="password"
+                autoComplete="current-password"
+                required
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                className="w-full h-11 px-3 rounded-xl border border-slate-200 bg-white text-slate-800 focus:outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={signingIn}
+              className="w-full h-11 rounded-xl bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              {signingIn && <Loader2 className="w-4 h-4 animate-spin" />}
+              {signingIn ? 'מתחברת...' : 'התחברות'}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8">
-      <div className="mb-6">
-        <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-800 tracking-tight">
-          מסך ניהול בקשות
-        </h1>
-        <p className="text-slate-500 mt-1.5 text-sm sm:text-base">
-          אישור השאלות והחזרת פריטים לזמינות.
-        </p>
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-800 tracking-tight">
+            מסך ניהול בקשות
+          </h1>
+          <p className="text-slate-500 mt-1.5 text-sm sm:text-base">
+            אישור השאלות והחזרת פריטים לזמינות.
+          </p>
+        </div>
+        <button
+          onClick={signOut}
+          className="inline-flex items-center gap-1.5 h-9 px-3 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100"
+        >
+          <LogOut className="w-4 h-4" />
+          יציאה
+        </button>
       </div>
 
       {error && (

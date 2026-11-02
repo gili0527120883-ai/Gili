@@ -1,7 +1,14 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+const supabaseUrl =
+  import.meta.env.VITE_SUPABASE_URL || 'https://dgjpfvpfaginqmkvnvhv.supabase.co';
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+if (!supabaseAnonKey) {
+  throw new Error(
+    'Missing VITE_SUPABASE_ANON_KEY. Set the Supabase publishable/anon key in the Cloudflare Pages build environment.'
+  );
+}
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
